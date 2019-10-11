@@ -1,0 +1,367 @@
+import React from "react";
+import { app } from "./Firebase";
+import "./style.scss";
+import { Button, Icon } from "antd";
+import DragAndDrop from "./DragAndDrop.js";
+import { withRouter, Redirect } from "react-router";
+import firebase from "firebase";
+import Firestore from "./Firestore.js";
+import Ionicon from "react-ionicons";
+import Utils from "./Utils.js";
+import ListItem from '@material-ui/core/ListItem';
+
+
+import MessagePopup from "./MessagePopup.js";
+
+class NewProjectPopup extends React.Component {
+  constructor(props) {
+    super(props);
+
+    this.localCache = window.localStorage;
+
+    this.isProjectCreated = false;
+
+  }
+
+  state = {
+    showMessagePopup: false,
+    projectTitle: "",
+    projectTopic: "",
+    medium: "",
+    imageName: "", //The ID of the image, whether from DB or upload
+    image: "", //represents the source information about the image.
+    file: "" //the uploaded file for the image.
+  };
+
+  toggleMessagePopup() {
+    this.setState({ showMessagePopup: !this.state.showMessagePopup });
+  }
+
+  componentDidMount() {
+    //Local storage variant
+    var title = this.localCache.getItem("title");
+    if (title) {
+      this.setState({ projectTitle: title });
+    }
+
+    var topic = this.localCache.getItem("topic");
+    if (topic) {
+      this.setState({ projectTopic: topic });
+    }
+
+    var image = this.localCache.getItem("image");
+    if (image) {
+      this.setState({ image: image });
+    }
+
+    var imageName = this.localCache.getItem("imageName");
+    if (imageName) {
+      this.setState({ imageName: imageName });
+    }
+  }
+
+  componentWillUnmount() {
+    //If a project is made, the local cache empties
+    if (this.isProjectCreated) {
+      this.localCache.removeItem("title");
+      this.localCache.removeItem("topic");
+      this.localCache.removeItem("image");
+      this.localCache.removeItem("imageName");
+    }
+  }
+
+  /**
+   * Function to handle when a file is dropped into the drag and drop area.
+   */
+  handleDrop = fileList => {
+    //If what was dragged in was not a image.
+    if (!fileList[0] || fileList[0]["type"].split("/")[0] !== "image") {
+      return;
+    }
+
+    var file = fileList[0];
+    if (file) {
+      var size = file.size;
+      if (size > 5120000) {
+        this.toggleMessagePopup();
+        return;
+      }
+      this.setState({ file: file });
+
+      var uniqueName = Utils.uuid();      
+      this.setState({imageName:uniqueName});
+      this.localCache.setItem("imageName", uniqueName);
+
+      var reader = new FileReader();
+      reader.onload = function (e) {
+        try {
+          this.localCache.setItem("image", e.target.result);
+        } catch (e) {
+          //Image exceeds local storage.
+        }
+        this.setState({ image: e.target.result });
+      }.bind(this);
+      reader.readAsDataURL(file);
+    }
+  };
+
+  /**
+   * Uploads an image to firestore
+   * @param {File} file: File to be uploaded to firebase.
+   */
+  uploadImage(file) {
+    if (!file) {
+      return;
+    }
+
+    //Uploading image    
+    var storageRef = firebase.storage().ref("projectImage/" + this.state.imageName);
+    var uploadTask = storageRef.put(file);
+
+    uploadTask.on(
+      "state_changed",
+      function error(err) { },
+      function complete() {
+        console.log("successful upload");
+      }
+    );
+  }
+
+  //@@TODO limit title length
+  handleTitleChange =(event)=> {
+    this.setState({ projectTitle: event.target.value }, function() {
+      //Local cache variant
+      this.localCache.setItem("title", this.state.projectTitle);
+    });
+  }
+
+  //@@TODO limit topic change length
+  handleTopicChange = (event) => {
+    this.setState({ projectTopic: event.target.value }, function() {
+      this.localCache.setItem("topic", this.state.projectTopic);
+    });
+  }
+
+  medChange = (event) =>{
+    //@@TODO maybe local cache this too.
+    this.setState({medium: event.target.value});
+  }
+
+  makeProject() {
+    //Make upload image here too.
+    this.isProjectCreated = true;
+    /*
+    var e = document.getElementById("dropdown");
+    var ddval = e.options[e.selectedIndex].text;
+  
+    this.state.medium = ddval;
+    */
+
+    var data = {
+      archived: false,
+      medium: this.state.medium,
+      title: this.state.projectTitle,
+      subtitle: this.state.projectTopic,
+      image: "marae.jpg", //Default image.
+      creationTime: + new Date()
+    };
+
+    if (this.state.imageName) {
+      data.image = this.state.imageName;
+    }
+
+    if (this.state.file) {
+      this.uploadImage(this.state.file);
+    }
+
+    const { history } = this.props;
+    var uid = firebase.auth().currentUser.uid;
+    Firestore.updateUserDetails().then(() => {
+        console.log("User details updated.");
+    }).catch(error => {
+        console.error("Couldn't update user details, " + error);
+    });
+    Firestore.saveProject(uid, data).then(function(docRef){
+     
+      history.push({
+        pathname: "./project",
+        state: {
+          projectID: docRef.id,
+          medium: this.state.medium,
+          title: this.state.projectTitle,
+          topic: this.state.projectTopic,
+          image: this.state.image,
+          creationTime: + new Date()
+        }
+      })
+    }.bind(this)).catch(error => {
+        console.error("Save project failure, " + error);
+    });
+  }
+
+  render() {
+    var togglePopup = this.props.togglePopup;
+    return (
+      <React.Fragment>
+        <div className="popup">
+          <div className="inner newProjectPopup">
+            {this.state.showMessagePopup ?
+              <MessagePopup
+                text='Images have to be 5MB or smaller. Please upload an image with a smaller file size.'
+                closeMessagePopup={this.toggleMessagePopup.bind(this)} />
+              : null}
+            <Ionicon
+              style={{
+                position: "absolute",
+                right: "15px",
+                top: "15px",
+                cursor: 'pointer',
+              }}
+              icon="md-close"
+              onClick={() => togglePopup()}
+            />
+
+            <h1 className="newProjectTitle">New Project</h1>
+            <div
+              style={{
+                marginLeft: "25%",
+                marginRight: "25%"
+              }}
+            >
+              <form>
+                <div className="inputTitle">Project Title</div>
+                <input
+                  type="text"
+                  className="textInput"
+                  value={this.state.projectTitle}
+                  onChange={this.handleTitleChange}
+                  guide="inputProjectTitle"
+                />
+                <div className="inputTitle">Project Topic</div>
+                <input
+                  type="text"
+                  className="textInput"
+                  value={this.state.projectTopic}
+                  onChange={this.handleTopicChange}
+                  guide="inputProjectTopic"
+                />
+                {/* <ListItem
+                  button
+                  aria-haspopup="true"
+                  stye = {{
+                      width:"100%",
+                      backgroundColor: "#fd00ff"
+                  }}
+                  // onClick={handleClickListItem}
+                >
+                </ListItem> */}
+                <div className="chooseMedium"> 
+                  <select id="dropdown" class="custom-select" onChange={this.medChange}>
+                    <option value="0" disabled selected>Select your medium</option>
+                    <option value="Presentation">Presentation</option>
+                    <option value="Screencast">Screencast</option>
+                    <option value="Animation">Animation</option>
+                    <option value="Video">Video</option>
+                    <option value="Podcast">Podcast</option>
+                    <option value="Film">Film</option>
+                  </select>
+                </div>
+              </form>
+            </div>
+            <div
+              className='dropDiv'
+              style={{
+                marginTop: "10%",
+                marginLeft: "25%",
+                marginRight: "25%",
+                textAlign: "center"
+              }}
+            >
+              <div
+                style={{
+                  position: "absolute",
+                  height: "30%",
+                  width: "50%"
+                }}
+              >
+                <DragAndDrop handleDrop={this.handleDrop}>
+                  <Ionicon
+                    style={{
+                      position: "absolute",
+                      right: "15px",
+                      top: "15px",
+                      cursor: 'pointer',
+                    }}
+                    icon="md-close"
+                    onClick={() => {
+                      //Remove image from dropdown
+                      this.localCache.removeItem("image");
+                      this.localCache.removeItem("imageName");
+                      this.setState({ image: "" });
+                      this.setState({ file: "" });
+                      this.setState({ imageName: "" });
+                    }}
+                  />
+                  <div className="draggedImage">
+                    {this.state.image === "" && (
+                      <b className="dragText" style={{ color: "#fff" }}>
+                        Drag Image Here
+                      </b>
+                    )}
+                    <img src={this.state.image} />
+                  </div>
+                  <div
+                    style={{
+                      position: "absolute",
+                      height: "4.5em",
+                      width: "101%",
+                      textAlign: "left",
+                      backgroundColor: "#2C3539",
+                      color: "#fff",
+                      bottom: -10,
+                      left: "-0.5%",
+                      paddingLeft: 12,
+                      paddingTop: 3,
+                      borderBottomLeftRadius: 17,
+                      borderBottomRightRadius: 17
+                    }}
+                  >
+                    <b>{this.state.projectTitle}</b>
+                    <br />
+                    {this.state.projectTopic}
+                  </div>
+                </DragAndDrop>
+                <br />
+                <Button
+                guide="newProjectCreateButton"
+                className="newProjectCreateButton"
+                  style={{
+                    color: "#fff",
+                    marginTop: "5%",
+                    borderRadius: 11,
+                    width: "50%",
+                    boxShadow: "0px 2px 10px -4px rgba(0,0,0,0.5)",
+                    border: "none",
+                    fontFamily: "Montserrat",
+                    height: 45,
+                    fontWeight: "600"
+                  }}
+                  onClick={() => this.makeProject()}
+                  disabled={
+                    this.state.projectTitle.length == 0 ||
+                    this.state.projectTopic.length == 0 ||
+                    this.state.medium == 0
+                  }
+                >
+                  Create
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </React.Fragment>
+    );
+  }
+}
+
+export default withRouter(NewProjectPopup);
